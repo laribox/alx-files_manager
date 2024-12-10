@@ -1,7 +1,33 @@
 const crypto = require('crypto');
-const dbClient = require('../utils/db'); // Import the existing dbClient instance
+const dbClient = require('../utils/db');
+const redisClient = require('../utils/redis');
+const { ObjectId } = require('mongodb');
+import Bull from 'bull';
+
+const userQueue = new Bull('userQueue');
+
 
 class UsersController {
+
+  static async getMe(req, res) {
+    const token = req.headers['x-token'];
+    if (!token) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const userId = await redisClient.get(`auth_${token}`);
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const user = await dbClient.db.collection('users').findOne({ _id: ObjectId(userId) });
+    if (!user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    return res.status(200).json({ id: user._id.toString(), email: user.email });
+  }
+
   static async postNew(req, res) {
     const { email, password } = req.body;
 
@@ -27,6 +53,9 @@ class UsersController {
 
       // Insert new user
       const result = await usersCollection.insertOne({ email, password: hashedPassword });
+
+      // Add job to the userQueue
+      userQueue.add({ userId: result.insertedId });
 
       return res.status(201).json({ id: result.insertedId, email });
     } catch (err) {
